@@ -1,49 +1,96 @@
-const express = require("express");
-const app = express();
-const port = 3000;
-const morgan = require("morgan");
 const cheerio = require("cheerio");
-const puppeteer = require("puppeteer");
 const request = require("request-promise");
-const description = require("./description");
+const fs = require("fs");
+const baseUrl = "https://www.bankmega.com/promolainnya.php";
+let countPage = 1;
+let promotions = [];
+let results = {};
 
-(async function () {
+const getPromoCategories = async () => {
   try {
-    const baseUrl = "https://www.bankmega.com/";
-    const base = "https://www.bankmega.com/promolainnya.php";
-    const mainHtml = await request(base);
+    const mainHtml = await request(baseUrl);
     const $ = cheerio.load(mainHtml);
-
-    const href = $("#promolain > li > a")
+    const nameCategory = $("#subcatpromo > div ")
       .map((i, element) => {
-        const href = element.attribs.href;
-        return baseUrl + href;
-      })
-      .get();
-    console.log(href);
-
-    const idCategory = $("#subcatpromo > div > img")
-      .map((i, element) => {
-        const id = element.attribs.id;
+        const id = $(element).find("img").attr("id");
         return id;
       })
       .get();
-    Promise.all(
-      href.map(async (link) => {
-        try {
-          const desc = await description(link);
-          console.log(desc);
-        } catch (error) {
-          console.log("error", error);
-        }
-      })
-    );
+    return nameCategory;
   } catch (error) {
     console.log("error", error);
   }
-})();
-// app.use(morgan("dev"));
+};
+const getPromotions = async (url, subcat) => {
+  try {
+    let promoResults = [];
+    const mainHtml = await request(url);
+    const $ = cheerio.load(mainHtml);
+    const promoLink = $("#promolain > li")
+      .map((i, element) => {
+        const href = $(element).find("a").attr("href");
+        return href;
+      })
+      .get();
+    if (promoLink.length < 1) {
+      countPage = 1;
+      return false;
+    }
+    for (let index = 0; index < promoLink.length; index++) {
+      promoResults.push(descriptionPromotion(promoLink[index]));
+    }
+    Promise.all(promoResults).then((values) => {
+      promotions.push(values);
+    });
+    countPage++;
+    nextUrl = `${baseUrl}?subcat=${subcat}&page=${countPage}`;
+    return getPromotions(nextUrl, subcat);
+  } catch (error) {
+    console.log("error", error);
+  }
+};
 
-// app.listen(port, () =>
-//   console.log(`Example app listening at http://localhost:${port}`)
-// );
+const promoScarapper = async () => {
+  let categories = await getPromoCategories();
+  for (let index = 0; index < categories.length; index++) {
+    await getPromotions(
+      `${baseUrl}?subcat=${index + 1}&page=${countPage}`,
+      index + 1
+    );
+    results[categories[index]] = [].concat(...promotions);
+    promotions = [];
+  }
+  exportResultsJson(results);
+};
+const exportResultsJson = async (results) => {
+  const fileName = "solution.json";
+  fs.writeFile(fileName, JSON.stringify(results, null, 4), (error) => {
+    if (error) {
+      console.log("error exports ", error);
+    }
+    console.log("Success Export File " + fileName);
+  });
+};
+
+const descriptionPromotion = async (url) => {
+  const detailUrl = `${baseUrl.substring(0, 24)}/${url}`;
+  try {
+    const mainHtml = await request(detailUrl);
+    const $ = cheerio.load(mainHtml);
+    const imageUrl = $(".keteranganinside").find("img").attr("src");
+    let promotion = {
+      title: $(".titleinside").text().trim(),
+      area: $(".area > b").text(),
+      periode: $(".periode > b").text(),
+      image_url: `${baseUrl.substring(0, 24)}${imageUrl}`.replace(
+        /\s+/g,
+        "%20"
+      ),
+    };
+    return promotion;
+  } catch (error) {
+    console.log("error", error);
+  }
+};
+
+promoScarapper();
